@@ -12,7 +12,10 @@ Volume = namedtuple('Volume', 'path mode host')
 
 
 def retry_on_api_error(exception):
-    return isinstance(exception, docker.errors.APIError)
+    return isinstance(
+        exception,
+        (docker.errors.APIError, docker.errors.DockerException)
+    )
 
 
 api_retry = retrying.retry(
