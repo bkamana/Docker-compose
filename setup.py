@@ -25,15 +25,15 @@ def find_version(*file_paths):
 
 
 install_requires = [
-    'docopt >= 0.6.1, < 0.7',
-    'PyYAML >= 3.10, < 4',
-    'requests >= 2.2.1, < 3',
-    'texttable >= 0.8.1, < 0.9',
-    'websocket-client >= 0.11.0, < 0.12',
+    'docopt >= 0.6.1',
+    'PyYAML >= 3.10',
+    'requests >= 2.2.1',
+    'texttable >= 0.8.1',
+    'websocket-client >= 0.11.0',
     'docker-py >= 0.6.0',
-    'dockerpty >= 0.3.2, < 0.4',
+    'dockerpty >= 0.3.2',
     'retrying >= 1.2',
-    'six >= 1.3.0, < 2',
+    'six >= 1.3.0',
     'pytimeparse >= 1.1.2',
 ]
 
