@@ -130,60 +130,6 @@ class CLITestCase(DockerClientTestCase):
         self.assertEqual(len(db.containers()), 0)
         self.assertEqual(len(console.containers()), 0)
 
-    def test_up_with_includes(self):
-        self.command.base_dir = 'tests/fixtures/external-includes-figfile'
-
-        self.assertEqual(
-            [s.full_name for s in self.project.get_services()],
-            [
-                'externalincludesfigfileprojectc_configs',
-                'externalincludesfigfileprojectc_unrelated',
-                'externalincludesfigfileprojectc_webapp',
-                'externalincludesfigfileprojectb_configs',
-                'externalincludesfigfileprojectb_db',
-                'externalincludesfigfileprojectb_webapp',
-                'externalincludesfigfile_db',
-                'externalincludesfigfile_webapp',
-            ])
-
-        self.command.dispatch(['up', '-d'], None)
-
-        self.assertEqual(
-            set(c.name for c in self.project.containers(stopped=True)),
-            set([
-                'externalincludesfigfile_db_1',
-                'externalincludesfigfile_webapp_1',
-                'externalincludesfigfileprojectb_configs_1',
-                'externalincludesfigfileprojectb_db_1',
-                'externalincludesfigfileprojectb_webapp_1',
-                'externalincludesfigfileprojectc_configs_1',
-                'externalincludesfigfileprojectc_unrelated_1',
-                'externalincludesfigfileprojectc_webapp_1',
-            ]))
-
-        assert_has_links_and_volumes(
-            self.project,
-            'webapp',
-            set([
-                'externalincludesfigfile_db_1',
-                'externalincludesfigfileprojectb_webapp_1',
-                'externalincludesfigfileprojectc_webapp_1',
-            ]))
-
-        assert_has_links_and_volumes(
-            self.project,
-            'projectb_webapp',
-            set([
-                'externalincludesfigfileprojectb_db_1',
-                'externalincludesfigfileprojectc_webapp_1'
-            ]),
-            ['/home'])
-
-        assert_has_links_and_volumes(
-            self.project,
-            'projectc_webapp',
-            expected_volumes=['/home'])
-
     def test_up_with_recreate(self):
         self.command.dispatch(['up', '-d'], None)
         service = self.project.get_service('simple')

@@ -2,15 +2,10 @@ from __future__ import unicode_literals
 from __future__ import absolute_import
 from itertools import chain
 import logging
-from operator import (
-    attrgetter,
-    itemgetter,
-)
+from operator import itemgetter
 
 from docker.errors import APIError
-import six
 
-from fig import includes
 from fig.service import (
     Service,
     ServiceLink,
@@ -55,20 +50,19 @@ class Project(object):
     """
     A collection of services.
     """
-    def __init__(self, name, services, client, namespace=None, external_projects=None):
+    def __init__(self, name, services, client, namespace=None):
         self.name = name
         self.services = services
         self.client = client
         # The top level project name is the namespace for included projects
         self.namespace = namespace or name
-        self.external_projects = external_projects or []
 
     @classmethod
-    def from_dicts(cls, name, service_dicts, client, namespace, external_projects):
+    def from_dicts(cls, name, service_dicts, client, namespace):
         """
         Construct a ServiceCollection from a list of dicts representing services.
         """
-        project = cls(name, [], client, namespace, external_projects)
+        project = cls(name, [], client, namespace)
         for service_dict in sort_service_dicts(service_dicts):
             links = project.get_links(service_dict.pop('links', None),
                                       service_dict['name'])
@@ -85,14 +79,6 @@ class Project(object):
     @classmethod
     def from_config(cls, name, config, client, namespace=None, project_cache=None):
         services = []
-        project_config = config.pop('project-config', {})
-        external_projects = get_external_projects(
-            project_config.pop('include', {}),
-            project_config.pop('cache', {}),
-            client,
-            name,
-            project_cache)
-
         for service_name, service in list(config.items()):
             if not isinstance(service, dict):
                 raise ConfigurationError(
@@ -101,7 +87,7 @@ class Project(object):
                     'dictionary of configuration options.' % service_name)
             service['name'] = service_name
             services.append(service)
-        return cls.from_dicts(name, services, client, namespace, external_projects)
+        return cls.from_dicts(name, services, client, namespace)
 
     def get_service(self, name):
         """Retrieve a service by name.
@@ -123,16 +109,11 @@ class Project(object):
                 if service.name == service_name:
                     return service
 
-        for project in self.external_projects:
-            if project.name == project_name:
-                return project.get_service(service_name)
-
         raise NoSuchService(name)
 
     @property
     def all_services(self):
-        return (flat_map(attrgetter('services'), self.external_projects) +
-                self.services)
+        return self.services
 
     def get_services(self, service_names=None, include_links=False):
         """
@@ -265,40 +246,11 @@ class Project(object):
                 if service.has_container(container, one_off=one_off)]
 
     def __repr__(self):
-        return "Project(%s, services=%s, includes=%s)" % (
-            self.name,
-            len(self.services),
-            len(self.external_projects))
+        return "Project(%s, services=%s)" % (self.name, len(self.services))
 
 
 def flat_map(func, seq):
     return list(chain.from_iterable(map(func, seq)))
-
-
-def get_external_projects(
-        includes_config,
-        cache_config,
-        client,
-        project_name,
-        project_cache):
-    """Recursively fetch included projects.
-
-    Cache each external project by url. If a project is encountered with the
-    same url the same instance of :class:`Project` will be returned.
-    """
-    def build_project(name, *args, **kwargs):
-        name = '%s%s' % (project_name, name)
-        kwargs['namespace'] = project_name
-        return Project.from_config(name, *args, **kwargs)
-
-    if project_cache is None:
-        project_cache = includes.ExternalProjectCache(
-            includes.LocalConfigCache.from_config(cache_config),
-            client,
-            build_project)
-
-    return [project_cache.get_project_from_include(*item)
-            for item in six.iteritems(includes_config)]
 
 
 class NoSuchService(Exception):
