@@ -1,6 +1,122 @@
 Change log
 ==========
 
+1.4.0 (2015-08-04)
+------------------
+
+-   By default, `docker-compose up` now only recreates containers for services whose configuration has changed since they were created. This should result in a dramatic speed-up for many applications.
+
+    The experimental `--x-smart-recreate` flag which introduced this feature in Compose 1.3.0 has been removed, and a `--force-recreate` flag has been added for when you want to recreate everything.
+
+-   Several of Compose's commands - `scale`, `stop`, `kill` and `rm` - now perform actions on multiple containers in parallel, rather than in sequence, which will run much faster on larger applications.
+
+-   You can now specify a custom name for a service's container with `container_name`. Because Docker container names must be unique, this means you can't scale the service beyond one container.
+
+-   You no longer have to specify a `file` option when using `extends` - it will default to the current file.
+
+-   Service names can now contain dots, dashes and underscores.
+
+-   Compose can now read YAML configuration from standard input, rather than from a file, by specifying `-` as the filename. This makes it easier to generate configuration dynamically:
+
+        $ echo 'redis: {"image": "redis"}' | docker-compose --file - up
+
+-   There's a new `docker-compose version` command which prints extended information about Compose's bundled dependencies.
+
+-   `docker-compose.yml` now supports `log_opt` as well as `log_driver`, allowing you to pass extra configuration to a service's logging driver.
+
+-   `docker-compose.yml` now supports `memswap_limit`, similar to `docker run --memory-swap`.
+
+-   When mounting volumes with the `volumes` option, you can now pass in any mode supported by the daemon, not just `:ro` or `:rw`. For example, SELinux users can pass `:z` or `:Z`.
+
+-   You can now specify a custom volume driver with the `volume_driver` option in `docker-compose.yml`, much like `docker run --volume-driver`.
+
+-   A bug has been fixed where Compose would fail to pull images from private registries serving plain (unsecured) HTTP. The `--allow-insecure-ssl` flag, which was previously used to work around this issue, has been deprecated and now has no effect.
+
+-   A bug has been fixed where `docker-compose build` would fail if the build depended on a private Hub image or an image from a private registry.
+
+-   A bug has been fixed where Compose would crash if there were containers which the Docker daemon had not finished removing.
+
+-   Two bugs have been fixed where Compose would sometimes fail with a "Duplicate bind mount" error, or fail to attach volumes to a container, if there was a volume path specified in `docker-compose.yml` with a trailing slash.
+
+Thanks @mnowster, @dnephin, @ekristen, @funkyfuture, @jeffk and @lukemarsden!
+
+1.3.3 (2015-07-15)
+------------------
+
+Two regressions have been fixed:
+
+- When stopping containers gracefully, Compose was setting the timeout to 0, effectively forcing a SIGKILL every time.
+- Compose would sometimes crash depending on the formatting of container data returned from the Docker API.
+
+1.3.2 (2015-07-14)
+------------------
+
+The following bugs have been fixed:
+
+- When there were one-off containers created by running `docker-compose run` on an older version of Compose, `docker-compose run` would fail with a name collision. Compose now shows an error if you have leftover containers of this type lying around, and tells you how to remove them.
+- Compose was not reading Docker authentication config files created in the new location, `~/docker/config.json`, and authentication against private registries would therefore fail.
+- When a container had a pseudo-TTY attached, its output in `docker-compose up` would be truncated.
+- `docker-compose up --x-smart-recreate` would sometimes fail when an image tag was updated.
+- `docker-compose up` would sometimes create two containers with the same numeric suffix.
+- `docker-compose rm` and `docker-compose ps` would sometimes list services that aren't part of the current project (though no containers were erroneously removed).
+- Some `docker-compose` commands would not show an error if invalid service names were passed in.
+
+Thanks @dano, @josephpage, @kevinsimper, @lieryan, @phemmer, @soulrebel and @sschepens!
+
+1.3.1 (2015-06-21)
+------------------
+
+The following bugs have been fixed:
+
+- `docker-compose build` would always attempt to pull the base image before building.
+- `docker-compose help migrate-to-labels` failed with an error.
+- If no network mode was specified, Compose would set it to "bridge", rather than allowing the Docker daemon to use its configured default network mode.
+
+1.3.0 (2015-06-18)
+------------------
+
+Firstly, two important notes:
+
+- **This release contains breaking changes, and you will need to either remove or migrate your existing containers before running your app** - see the [upgrading section of the install docs](https://github.com/docker/compose/blob/1.3.0rc1/docs/install.md#upgrading) for details.
+
+- Compose now requires Docker 1.6.0 or later.
+
+We've done a lot of work in this release to remove hacks and make Compose more stable:
+
+- Compose now uses container labels, rather than names, to keep track of containers. This makes Compose both faster and easier to integrate with your own tools.
+
+- Compose no longer uses "intermediate containers" when recreating containers for a service. This makes `docker-compose up` less complex and more resilient to failure.
+
+There are some new features:
+
+- `docker-compose up` has an **experimental** new behaviour: it will only recreate containers for services whose configuration has changed in `docker-compose.yml`. This will eventually become the default, but for now you can take it for a spin:
+
+        $ docker-compose up --x-smart-recreate
+
+- When invoked in a subdirectory of a project, `docker-compose` will now climb up through parent directories until it finds a `docker-compose.yml`.
+
+Several new configuration keys have been added to `docker-compose.yml`:
+
+- `dockerfile`, like `docker build --file`, lets you specify an alternate Dockerfile to use with `build`.
+- `labels`, like `docker run --labels`, lets you add custom metadata to containers.
+- `extra_hosts`, like `docker run --add-host`, lets you add entries to a container's `/etc/hosts` file.
+- `pid: host`, like `docker run --pid=host`, lets you reuse the same PID namespace as the host machine.
+- `cpuset`, like `docker run --cpuset-cpus`, lets you specify which CPUs to allow execution in.
+- `read_only`, like `docker run --read-only`, lets you mount a container's filesystem as read-only.
+- `security_opt`, like `docker run --security-opt`, lets you specify [security options](https://docs.docker.com/reference/run/#security-configuration).
+- `log_driver`, like `docker run --log-driver`, lets you specify a [log driver](https://docs.docker.com/reference/run/#logging-drivers-log-driver).
+
+Many bugs have been fixed, including the following:
+
+- The output of `docker-compose run` was sometimes truncated, especially when running under Jenkins.
+- A service's volumes would sometimes not update after volume configuration was changed in `docker-compose.yml`.
+- Authenticating against third-party registries would sometimes fail.
+- `docker-compose run --rm` would fail to remove the container if the service had a `restart` policy in place.
+- `docker-compose scale` would refuse to scale a service beyond 1 container if it exposed a specific port number on the host.
+- Compose would refuse to create multiple volume entries with the same host path.
+
+Thanks @ahromis, @albers, @aleksandr-vin, @antoineco, @ccverak, @chernjie, @dnephin, @edmorley, @fordhurley, @josephpage, @KyleJamesWalker, @lsowen, @mchasal, @noironetworks, @sdake, @sdurrheimer, @sherter, @stephenlawrence, @thaJeztah, @thieman, @turtlemonvh, @twhiteman, @vdemeester, @xuxinkun and @zwily!
+
 1.2.0 (2015-04-16)
 ------------------
 

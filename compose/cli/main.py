@@ -16,6 +16,7 @@ from ..const import DEFAULT_TIMEOUT
 from ..project import NoSuchService, ConfigurationError
 from ..service import BuildError, NeedsBuildError
 from ..config import parse_environment
+from ..progress_stream import StreamOutputError
 from .command import Command
 from .docopt_command import NoSuchCommand
 from .errors import UserError
@@ -24,6 +25,11 @@ from .log_printer import LogPrinter
 from .utils import yesno, get_version_info
 
 log = logging.getLogger(__name__)
+
+INSECURE_SSL_WARNING = """
+Warning: --allow-insecure-ssl is deprecated and has no effect.
+It will be removed in a future version of Compose.
+"""
 
 
 def main():
@@ -34,7 +40,7 @@ def main():
     except KeyboardInterrupt:
         log.error("\nAborting.")
         sys.exit(1)
-    except (UserError, NoSuchService, ConfigurationError, legacy.LegacyContainersError) as e:
+    except (UserError, NoSuchService, ConfigurationError, legacy.LegacyError) as e:
         log.error(e.msg)
         sys.exit(1)
     except NoSuchCommand as e:
@@ -47,6 +53,9 @@ def main():
         sys.exit(1)
     except BuildError as e:
         log.error("Service '%s' failed to build: %s" % (e.service.name, e.reason))
+        sys.exit(1)
+    except StreamOutputError as e:
+        log.error(e)
         sys.exit(1)
     except NeedsBuildError as e:
         log.error("Service '%s' needs to be built, but --no-build was passed." % e.service.name)
@@ -130,10 +139,8 @@ class TopLevelCommand(Command):
 
         Usage: help COMMAND
         """
-        command = options['COMMAND']
-        if not hasattr(self, command):
-            raise NoSuchCommand(command, self)
-        raise SystemExit(getdoc(getattr(self, command)))
+        handler = self.get_handler(options['COMMAND'])
+        raise SystemExit(getdoc(handler))
 
     def kill(self, project, options):
         """
@@ -229,13 +236,13 @@ class TopLevelCommand(Command):
         Usage: pull [options] [SERVICE...]
 
         Options:
-            --allow-insecure-ssl    Allow insecure connections to the docker
-                                    registry
+            --allow-insecure-ssl    Deprecated - no effect.
         """
-        insecure_registry = options['--allow-insecure-ssl']
+        if options['--allow-insecure-ssl']:
+            log.warn(INSECURE_SSL_WARNING)
+
         project.pull(
             service_names=options['SERVICE'],
-            insecure_registry=insecure_registry
         )
 
     def rm(self, project, options):
@@ -277,8 +284,7 @@ class TopLevelCommand(Command):
         Usage: run [options] [-e KEY=VAL...] SERVICE [COMMAND] [ARGS...]
 
         Options:
-            --allow-insecure-ssl  Allow insecure connections to the docker
-                                  registry
+            --allow-insecure-ssl  Deprecated - no effect.
             -d                    Detached mode: Run container in the background, print
                                   new container name.
             --entrypoint CMD      Override the entrypoint of the image.
@@ -293,7 +299,8 @@ class TopLevelCommand(Command):
         """
         service = project.get_service(options['SERVICE'])
 
-        insecure_registry = options['--allow-insecure-ssl']
+        if options['--allow-insecure-ssl']:
+            log.warn(INSECURE_SSL_WARNING)
 
         if not options['--no-deps']:
             deps = service.get_linked_names()
@@ -303,7 +310,6 @@ class TopLevelCommand(Command):
                     service_names=deps,
                     start_deps=True,
                     allow_recreate=False,
-                    insecure_registry=insecure_registry,
                 )
 
         tty = True
@@ -337,12 +343,21 @@ class TopLevelCommand(Command):
         if not options['--service-ports']:
             container_options['ports'] = []
 
-        container = service.create_container(
-            quiet=True,
-            one_off=True,
-            insecure_registry=insecure_registry,
-            **container_options
-        )
+        try:
+            container = service.create_container(
+                quiet=True,
+                one_off=True,
+                **container_options
+            )
+        except APIError as e:
+            legacy.check_for_legacy_containers(
+                project.client,
+                project.name,
+                [service.name],
+                allow_one_off=False,
+            )
+
+            raise e
 
         if options['-d']:
             service.start_container(container)
@@ -363,8 +378,14 @@ class TopLevelCommand(Command):
 
             $ docker-compose scale web=2 worker=3
 
-        Usage: scale [SERVICE=NUM...]
+        Usage: scale [options] [SERVICE=NUM...]
+
+        Options:
+          -t, --timeout TIMEOUT      Specify a shutdown timeout in seconds.
+                                     (default: 10)
         """
+        timeout = int(options.get('--timeout') or DEFAULT_TIMEOUT)
+
         for s in options['SERVICE=NUM']:
             if '=' not in s:
                 raise UserError('Arguments to scale should be in the form service=num')
@@ -374,7 +395,7 @@ class TopLevelCommand(Command):
             except ValueError:
                 raise UserError('Number of containers for service "%s" is not a '
                                 'number' % service_name)
-            project.get_service(service_name).scale(num)
+            project.get_service(service_name).scale(num, timeout=timeout)
 
     def start(self, project, options):
         """
@@ -396,7 +417,7 @@ class TopLevelCommand(Command):
           -t, --timeout TIMEOUT      Specify a shutdown timeout in seconds.
                                      (default: 10)
         """
-        timeout = float(options.get('--timeout') or DEFAULT_TIMEOUT)
+        timeout = int(options.get('--timeout') or DEFAULT_TIMEOUT)
         project.stop(service_names=options['SERVICE'], timeout=timeout)
 
     def restart(self, project, options):
@@ -409,62 +430,69 @@ class TopLevelCommand(Command):
           -t, --timeout TIMEOUT      Specify a shutdown timeout in seconds.
                                      (default: 10)
         """
-        timeout = float(options.get('--timeout') or DEFAULT_TIMEOUT)
+        timeout = int(options.get('--timeout') or DEFAULT_TIMEOUT)
         project.restart(service_names=options['SERVICE'], timeout=timeout)
 
     def up(self, project, options):
         """
-        Build, (re)create, start and attach to containers for a service.
+        Builds, (re)creates, starts, and attaches to containers for a service.
 
-        By default, `docker-compose up` will aggregate the output of each container, and
-        when it exits, all containers will be stopped. If you run `docker-compose up -d`,
-        it'll start the containers in the background and leave them running.
+        Unless they are already running, this command also starts any linked services.
 
-        If there are existing containers for a service, `docker-compose up` will stop
-        and recreate them (preserving mounted volumes with volumes-from),
-        so that changes in `docker-compose.yml` are picked up. If you do not want existing
-        containers to be recreated, `docker-compose up --no-recreate` will re-use existing
-        containers.
+        The `docker-compose up` command aggregates the output of each container. When
+        the command exits, all containers are stopped. Running `docker-compose up -d`
+        starts the containers in the background and leaves them running.
+
+        If there are existing containers for a service, and the service's configuration
+        or image was changed after the container's creation, `docker-compose up` picks
+        up the changes by stopping and recreating the containers (preserving mounted
+        volumes). To prevent Compose from picking up changes, use the `--no-recreate`
+        flag.
+
+        If you want to force Compose to stop and recreate all containers, use the
+        `--force-recreate` flag.
 
         Usage: up [options] [SERVICE...]
 
         Options:
-            --allow-insecure-ssl   Allow insecure connections to the docker
-                                   registry
+            --allow-insecure-ssl   Deprecated - no effect.
             -d                     Detached mode: Run containers in the background,
                                    print new container names.
             --no-color             Produce monochrome output.
             --no-deps              Don't start linked services.
-            --x-smart-recreate     Only recreate containers whose configuration or
-                                   image needs to be updated. (EXPERIMENTAL)
+            --force-recreate       Recreate containers even if their configuration and
+                                   image haven't changed. Incompatible with --no-recreate.
             --no-recreate          If containers already exist, don't recreate them.
+                                   Incompatible with --force-recreate.
             --no-build             Don't build an image, even if it's missing
             -t, --timeout TIMEOUT  Use this timeout in seconds for container shutdown
                                    when attached or when containers are already
                                    running. (default: 10)
         """
-        insecure_registry = options['--allow-insecure-ssl']
+        if options['--allow-insecure-ssl']:
+            log.warn(INSECURE_SSL_WARNING)
+
         detached = options['-d']
 
         monochrome = options['--no-color']
 
         start_deps = not options['--no-deps']
         allow_recreate = not options['--no-recreate']
-        smart_recreate = options['--x-smart-recreate']
+        force_recreate = options['--force-recreate']
         service_names = options['SERVICE']
-        timeout = float(options.get('--timeout') or DEFAULT_TIMEOUT)
+        timeout = int(options.get('--timeout') or DEFAULT_TIMEOUT)
 
-        project.up(
+        if force_recreate and not allow_recreate:
+            raise UserError("--force-recreate and --no-recreate cannot be combined.")
+
+        to_attach = project.up(
             service_names=service_names,
             start_deps=start_deps,
             allow_recreate=allow_recreate,
-            smart_recreate=smart_recreate,
-            insecure_registry=insecure_registry,
+            force_recreate=force_recreate,
             do_build=not options['--no-build'],
             timeout=timeout
         )
-
-        to_attach = [c for s in project.get_services(service_names) for c in s.containers()]
 
         if not detached:
             print("Attaching to", list_containers(to_attach))
@@ -484,6 +512,24 @@ class TopLevelCommand(Command):
     def migrate_to_labels(self, project, _options):
         """
         Recreate containers to add labels
+
+        If you're coming from Compose 1.2 or earlier, you'll need to remove or
+        migrate your existing containers after upgrading Compose. This is
+        because, as of version 1.3, Compose uses Docker labels to keep track
+        of containers, and so they need to be recreated with labels added.
+
+        If Compose detects containers that were created without labels, it
+        will refuse to run so that you don't end up with two sets of them. If
+        you want to keep using your existing containers (for example, because
+        they have data volumes you want to preserve) you can migrate them with
+        the following command:
+
+            docker-compose migrate-to-labels
+
+        Alternatively, if you're not worried about keeping them, you can
+        remove them - Compose will just create new ones.
+
+            docker rm -f myapp_web_1 myapp_db_1 ...
 
         Usage: migrate-to-labels
         """
