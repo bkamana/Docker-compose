@@ -101,7 +101,6 @@ class ServiceTest(DockerClientTestCase):
         service.remove_stopped()
         self.assertEqual(len(service.containers(stopped=True)), 0)
 
-    @unittest.skip("Requires docker 1.7")
     def test_create_container_with_one_off(self):
         db = self.create_service('db')
         container = db.create_container(one_off=True)
@@ -119,6 +118,7 @@ class ServiceTest(DockerClientTestCase):
         service.start_container(container)
         self.assertIn('/var/db', container.get('Volumes'))
 
+    @unittest.skip("Requires docker 1.7")
     def test_create_container_with_volume_driver(self):
         service = self.create_service('db', volume_driver='foodriver')
         container = service.create_container()
